@@ -1,4 +1,5 @@
 # %%
+from .FTGMM import define_gmm, estimate_gmm_bbox
 from .GaussianPointCloudScene import GaussianPointCloudScene
 from .ImagePoseDataset import ImagePoseDataset
 from .Camera import CameraInfo
@@ -8,7 +9,7 @@ from .LossFunction import LossFunction
 import torch
 import argparse
 from dataclass_wizard import YAMLWizard
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 import torchvision.transforms as transforms
@@ -52,10 +53,14 @@ class GaussianPointCloudTrainer:
         half_downsample_factor_interval: int = 250
         summary_writer_log_dir: str = "logs"
         output_model_dir: Optional[str] = None
-        rasterisation_config: GaussianPointCloudRasterisation.GaussianPointCloudRasterisationConfig = GaussianPointCloudRasterisation.GaussianPointCloudRasterisationConfig()
-        adaptive_controller_config: GaussianPointAdaptiveController.GaussianPointAdaptiveControllerConfig = GaussianPointAdaptiveController.GaussianPointAdaptiveControllerConfig()
-        gaussian_point_cloud_scene_config: GaussianPointCloudScene.PointCloudSceneConfig = GaussianPointCloudScene.PointCloudSceneConfig()
-        loss_function_config: LossFunction.LossFunctionConfig = LossFunction.LossFunctionConfig()
+        rasterisation_config: GaussianPointCloudRasterisation.GaussianPointCloudRasterisationConfig = field(
+            default_factory=GaussianPointCloudRasterisation.GaussianPointCloudRasterisationConfig)
+        adaptive_controller_config: GaussianPointAdaptiveController.GaussianPointAdaptiveControllerConfig = field(
+            default_factory=GaussianPointAdaptiveController.GaussianPointAdaptiveControllerConfig)
+        gaussian_point_cloud_scene_config: GaussianPointCloudScene.PointCloudSceneConfig = field(
+            default_factory=GaussianPointCloudScene.PointCloudSceneConfig)
+        loss_function_config: LossFunction.LossFunctionConfig = field(
+            default_factory=LossFunction.LossFunctionConfig)
 
     def __init__(self, config: TrainConfig):
         self.config = config
@@ -168,6 +173,8 @@ class GaussianPointCloudTrainer:
             image_pred = torch.clamp(image_pred, min=0, max=1)
             # hxwx3->3xhxw
             image_pred = image_pred.permute(2, 0, 1)
+            gmm = define_gmm(scene=self.scene)
+            bbox_min, bbox_max = estimate_gmm_bbox(gmm)
             loss, l1_loss, ssim_loss = self.loss_function(
                 image_pred, 
                 image_gt, 
