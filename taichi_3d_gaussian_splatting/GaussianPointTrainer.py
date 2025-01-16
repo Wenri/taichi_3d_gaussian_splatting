@@ -1,5 +1,5 @@
 # %%
-from .FTGMM import define_gmm, estimate_gmm_bbox
+from .FTGMM import define_gmm, sample_gmm, transform_gmm_to_fourier
 from .GaussianPointCloudScene import GaussianPointCloudScene
 from .ImagePoseDataset import ImagePoseDataset
 from .Camera import CameraInfo
@@ -174,7 +174,8 @@ class GaussianPointCloudTrainer:
             # hxwx3->3xhxw
             image_pred = image_pred.permute(2, 0, 1)
             gmm = define_gmm(scene=self.scene)
-            bbox_min, bbox_max = estimate_gmm_bbox(gmm)
+            sample_gmm(gmm)
+            transform_gmm_to_fourier(gmm)
             loss, l1_loss, ssim_loss = self.loss_function(
                 image_pred, 
                 image_gt, 

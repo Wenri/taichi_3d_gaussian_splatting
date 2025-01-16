@@ -62,7 +62,7 @@ def quaternions_to_scale_tril(quaternions, log_scales,
             log_scales = log_scales[invalid].to(dtype=fallback_type)
             scale_tril[invalid] = quaternions_to_scale_tril(
                 quaternions, log_scales, fallback_type=None, fallback_scale=fallback_scale).to(scale_tril)
-            
+
             return scale_tril
 
         if fallback_scale:
@@ -122,30 +122,124 @@ class MyGrid(nn.Module):
         return nn.functional.grid_sample(self.grid, x)
 
 
-def train_sample_gmm():
-    gmm = define_gmm()
-    x = gmm.sample()
+def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
+    device = gmm.component_distribution.mean.device
 
-    grid_size = 800
+    # Get bounding box of GMM
+    bbox_min, bbox_max = estimate_gmm_bbox(gmm)
 
-    # Generate coordinate grid over the range [-1, 1]
-    x_coords = y_coords = torch.linspace(-1, 1, grid_size)
-    grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='xy')  # grid_x and grid_y of shape (H,W)
+    # Generate coordinate grid over the bbox range
+    coords_x = torch.linspace(bbox_min[0], bbox_max[0], grid_size, device=device)
+    coords_y = torch.linspace(bbox_min[1], bbox_max[1], grid_size, device=device)
+    coords_z = torch.linspace(bbox_min[2], bbox_max[2], grid_size, device=device)
+    grid_x, grid_y, grid_z = torch.meshgrid(coords_x, coords_y, coords_z, indexing='ij')
 
-    # Stack to get coordinates tensor of shape (H,W,2)
-    coords = torch.stack([grid_x, grid_y], dim=-1)  # (H,W,2)
+    # Stack to get coordinates tensor of shape (H,W,D,3)
+    coords = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (H,W,D,3)
 
-    # Compute GMM log probabilities at each coordinate to create an image
+    # Compute GMM log probabilities in chunks to avoid OOM
+    volume = torch.zeros((grid_size, grid_size, grid_size), device=device)
+
     with torch.no_grad():
-        image = gmm.log_prob(coords)
+        # Process ${chunk_size} slices at a time
+        for i in range(0, grid_size, chunk_size):
+            end_idx = min(i + chunk_size, grid_size)
+            coords_chunk = coords[i:end_idx]  # (chunk,W,D,3)
+            volume[i:end_idx] = gmm.log_prob(coords_chunk)
 
+    # Visualize middle slice of volume
     fig = plt.figure()
-    plt.imshow(torch.exp(image.detach()).numpy())
+    plt.imshow(torch.exp(volume[:, :, grid_size // 2].detach().cpu()).numpy())
     plt.savefig('grid_gt.png')
     plt.close()
 
-    # Create the grid module
-    mygrid = MyGrid(grid_size=grid_size)
+    return volume
+
+
+def transform_volume_to_fourier(volume: torch.Tensor):
+    """Transform a volume into Fourier space by applying FFT
+    
+    Args:
+        volume: Input volume tensor of shape (grid_size, grid_size, grid_size)
+        
+    Returns:
+        Fourier transform of volume as complex tensor of shape (grid_size, grid_size, grid_size)
+    """
+    # Convert log probabilities to probabilities if needed
+    if torch.min(volume) < 0:
+        volume = torch.exp(volume)
+
+    # Normalize volume to sum to 1
+    volume = volume / volume.sum()
+
+    # Apply 3D FFT
+    fourier_volume = torch.fft.fftn(volume)
+
+    # Shift zero frequency component to center
+    fourier_volume = torch.fft.fftshift(fourier_volume)
+
+    # Visualize middle slice magnitude spectrum
+    grid_size = volume.shape[0]
+    fig = plt.figure()
+    plt.imshow(torch.abs(fourier_volume[:, :, grid_size // 2].detach().cpu()).numpy())
+    plt.colorbar()
+    plt.savefig('volume_fourier_spectrum.png')
+    plt.close()
+
+    return fourier_volume
+
+
+def transform_gmm_to_fourier(gmm: MixtureSameFamily):
+    """Transform GMM into Fourier space using closed form equation of Fourier transform of Gaussians.
+
+    Args:
+        gmm: Gaussian Mixture Model to transform
+        
+    Returns:
+        Fourier transform of GMM density as new MixtureSameFamily
+    """
+    # Validate input types
+    if not isinstance(gmm, MixtureSameFamily):
+        raise TypeError(f"Expected MixtureSameFamily, got {type(gmm)}")
+    if not isinstance(gmm.component_distribution, MultivariateNormal):
+        raise TypeError(f"Expected MultivariateNormal component distribution, got {type(gmm.component_distribution)}")
+
+    # Get GMM parameters
+    means = gmm.component_distribution.mean  # (N, D)
+    # noinspection PyUnresolvedReferences
+    covs = gmm.component_distribution.covariance_matrix  # (N, D, D)
+    mix_probs = gmm.mixture_distribution.probs  # (N,)
+
+    # The Fourier transform of a Gaussian is another Gaussian:
+    # F[N(μ,Σ)](ω) = exp(-2π²ω^T Σ ω + 2πiω^T μ)
+
+    # New means in Fourier space are related to phase shifts
+    fourier_means = 2 * torch.pi * means
+
+    # New covariances in Fourier space are inversely related
+    # Scale by -2π² and invert
+    fourier_covs = -2 * (torch.pi ** 2) * covs
+
+    # Create new multivariate normal with transformed parameters
+    fourier_comp = MultivariateNormal(fourier_means, fourier_covs, validate_args=False)
+
+    # Mixture weights remain unchanged
+    fourier_mix = Categorical(mix_probs)
+
+    # Return new mixture model in Fourier space
+    fourier_gmm = MixtureSameFamily(fourier_mix, fourier_comp)
+
+    return fourier_gmm
+
+
+def optimize_grid_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
+    device = gmm.component_distribution.mean.device
+
+    # Get bounding box of GMM
+    bbox_min, bbox_max = estimate_gmm_bbox(gmm)
+
+    # Create the grid module for 3D
+    mygrid = MyGrid(grid_size=grid_size).to(device)
     # Define optimizer
     optimizer = optim.Adam(mygrid.parameters(), lr=1e-1)
     # Number of epochs
@@ -156,14 +250,15 @@ def train_sample_gmm():
         optimizer.zero_grad()
 
         with torch.no_grad():
-            coords_gmm = gmm.sample([1, 1, 40000])
-            coords_rnd = torch.rand_like(coords_gmm) * 2 - 1
+            # Reduce number of samples to prevent OOM
+            coords_gmm = gmm.sample([1, 1, 10000])  # Sample from GMM (reduced from 40000)
+            coords_rnd = torch.rand_like(coords_gmm) * (bbox_max - bbox_min) + bbox_min  # Random samples within bbox
             coords_flat = torch.cat([coords_gmm, coords_rnd], dim=1)
 
             # Compute true log_probs from GMM at the corresponding coordinates
-            true_log_probs = gmm.log_prob(coords_flat)  # (H*W)
+            true_log_probs = gmm.log_prob(coords_flat)  # (H*W*D)
 
-        # The grid's values are of shape (1,1,H,W), flatten to (H*W)
+        # The grid's values are of shape (1,1,H,W,D), flatten to (H*W*D)
         grid_values = nn.functional.logsigmoid(mygrid(coords_flat))  # Predicted log_probs at grid positions
 
         # Compute loss
@@ -176,9 +271,9 @@ def train_sample_gmm():
         if epoch % 10 == 0:
             print(f"Epoch {epoch}/{epochs}, Loss: {loss.item()}")
 
-    # After training, the grid parameter stores the GMM's log_probs at the grid coordinates
+    # After training, visualize middle slice of volume
     fig = plt.figure()
-    plt.imshow(torch.sigmoid(mygrid.grid.squeeze().detach()).numpy())
+    plt.imshow(torch.sigmoid(mygrid.grid.squeeze()[:, :, grid_size // 2].detach().cpu()).numpy())
     plt.savefig('grid_displacement.png')
     plt.close()
 
@@ -205,7 +300,3 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     bbox_max = torch.max(maxs, dim=0)[0]  # (D,)
 
     return bbox_min, bbox_max
-
-
-if __name__ == '__main__':
-    train_sample_gmm()
