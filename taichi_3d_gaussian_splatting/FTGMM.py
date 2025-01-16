@@ -54,10 +54,15 @@ def quaternions_to_scale_tril(quaternions, log_scales,
         invalid = info > 0
 
         if fallback_type:
+            valid = torch.logical_not(info)
+            scale_tril = torch.empty_like(scale_tril)
+            scale_tril[valid] = torch.linalg.cholesky(covariances[valid])
+
             quaternions = quaternions[invalid].to(dtype=fallback_type)
             log_scales = log_scales[invalid].to(dtype=fallback_type)
             scale_tril[invalid] = quaternions_to_scale_tril(
                 quaternions, log_scales, fallback_type=None, fallback_scale=fallback_scale).to(scale_tril)
+            
             return scale_tril
 
         if fallback_scale:
