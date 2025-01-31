@@ -1,5 +1,5 @@
 # %%
-from .FTGMM import define_gmm, sample_gmm, transform_gmm_to_fourier
+from .FTGMM import define_gmm, sample_gmm, transform_gmm
 from .GaussianPointCloudScene import GaussianPointCloudScene
 from .ImagePoseDataset import ImagePoseDataset
 from .Camera import CameraInfo
@@ -173,9 +173,7 @@ class GaussianPointCloudTrainer:
             image_pred = torch.clamp(image_pred, min=0, max=1)
             # hxwx3->3xhxw
             image_pred = image_pred.permute(2, 0, 1)
-            gmm = define_gmm(scene=self.scene)
-            sample_gmm(gmm)
-            transform_gmm_to_fourier(gmm)
+
             loss, l1_loss, ssim_loss = self.loss_function(
                 image_pred, 
                 image_gt, 
@@ -187,6 +185,10 @@ class GaussianPointCloudTrainer:
 
             recent_losses.append(loss.item())
             
+            if iteration % 1000 == 0:
+                gmm = define_gmm(scene=self.scene)
+                sample_gmm(gmm)
+                transform_gmm(gmm)
 
             if iteration % self.config.position_learning_rate_decay_interval == 0:
                 scheduler.step()
