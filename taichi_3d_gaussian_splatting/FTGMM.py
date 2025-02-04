@@ -122,7 +122,7 @@ class MyGrid(nn.Module):
         return nn.functional.grid_sample(self.grid, x)
 
 
-def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
+def get_sample_coords(gmm, grid_size):
     device = gmm.component_distribution.mean.device
 
     # Get bounding box of GMM
@@ -136,6 +136,37 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
 
     # Stack to get coordinates tensor of shape (H,W,D,3)
     coords = torch.stack([grid_x, grid_y, grid_z], dim=-1)  # (H,W,D,3)
+    return coords
+
+
+def get_fourier_coords(gmm, grid_size):
+    device = gmm.component_distribution.mean.device
+
+    # Get bounding box of GMM
+    bbox_min, bbox_max = estimate_gmm_bbox(gmm)
+
+    # Calculate frequency range based on bbox size
+    # Use reciprocal of bbox size to determine frequency spacing
+    freq_spacing = 2 * torch.pi / (bbox_max - bbox_min)
+
+    # Generate frequency coordinates centered at 0
+    # Grid spans [-grid_size/2, grid_size/2) in frequency space
+    freq_x = torch.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size, device=device) * freq_spacing[0]
+    freq_y = torch.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size, device=device) * freq_spacing[1]
+    freq_z = torch.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size, device=device) * freq_spacing[2]
+
+    # Create frequency coordinate grid
+    grid_kx, grid_ky, grid_kz = torch.meshgrid(freq_x, freq_y, freq_z, indexing='ij')
+
+    # Stack to get wavevector coordinates tensor of shape (H,W,D,3)
+    coords = torch.stack([grid_kx, grid_ky, grid_kz], dim=-1)
+
+    return coords
+
+
+def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
+    device = gmm.component_distribution.mean.device
+    coords = get_sample_coords(gmm, grid_size)
 
     # Compute GMM log probabilities in chunks to avoid OOM
     volume = torch.zeros((grid_size, grid_size, grid_size), device=device)
@@ -203,100 +234,194 @@ def transform_gmm(gmm: MixtureSameFamily):
     return v1, v2, v3
 
 
-def transform_gmm_to_fourier1(gmm: MixtureSameFamily):
-    """Transform GMM into Fourier space using closed form equation of Fourier transform of Gaussians.
+@torch.no_grad()
+def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tensor):
+    """
+    Compare the discrete FFT of `volume` to the closed-form GMM Fourier transform
+    computed at matching frequency indices.
+    """
+    device = volume.device
+    grid_size = volume.shape[0]  # Assuming volume is (N,N,N)
+
+    # 1) Compute the DFT of the volume:
+    #    volume_fft: shape (N, N, N), complex
+    volume_fft = transform_volume_to_fourier(volume)
+
+    # 2) Estimate the bounding box used to create 'volume', so we can build f1 consistently.
+    bbox_min, bbox_max = estimate_gmm_bbox(gmm)  # or use your known bounding box
+    # (Optionally expand it slightly if you originally did so in sample_gmm)
+
+    # 3) Build the GMM -> Fourier function that matches the DFT convention:
+    f1 = transform_gmm_to_fourier1(
+        gmm,
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        grid_size=grid_size,
+        scale_by_voxel_volume=True  # so amplitude is in the same ballpark
+    )
+
+    # 4) Evaluate f1 at the same "shifted" frequency indices:
+    #    After fftshift, the frequency index (kx,ky,kz) = 0 is in the center of volume_fft.
+    #    The indices range in [-N//2, ..., N//2 - 1].
+    #    We'll build a meshgrid of those indices and call f1.
+    freq_indices = torch.arange(-grid_size // 2, grid_size // 2, device=device)
+    kx, ky, kz = torch.meshgrid(freq_indices, freq_indices, freq_indices, indexing='ij')
+    # shape: (N, N, N, 3)
+    k_indices = torch.stack([kx, ky, kz], dim=-1)
+
+    # 5) Compute the analytic GMM Fourier transform f1(k) on all these indices:
+    #    We'll flatten k_indices and process in batches to avoid OOM:
+    k_indices_flat = k_indices.reshape(-1, 3)  # (N^3, 3)
+    batch_size = 1000  # Process 1k points at a time
+    f1_values_list = []
+
+    for i in range(0, k_indices_flat.shape[0], batch_size):
+        batch = k_indices_flat[i:i + batch_size]
+        f1_values_batch = f1(batch)  # shape (batch_size,) complex
+        f1_values_list.append(f1_values_batch)
+
+    # Concatenate batches
+    f1_values_flat = torch.cat(f1_values_list)
+    # reshape back
+    f1_values = f1_values_flat.reshape(grid_size, grid_size, grid_size)
+
+    # 6) Now compare magnitude (and/or phase) to volume_fft:
+    #    For example, compute an L2 error or correlation.
+    #    NOTE: volume_fft is shape (N,N,N) complex, same for f1_values.
+    #    a) Magnitude difference
+    diff = torch.abs(volume_fft - f1_values)
+    mag_err = diff.mean().item()
+
+    #    b) Possibly measure correlation in magnitude or real part
+    corr_num = torch.sum((volume_fft.real * f1_values.real) + (volume_fft.imag * f1_values.imag))
+    corr_den = torch.sqrt(
+        torch.sum(volume_fft.real ** 2 + volume_fft.imag ** 2) * torch.sum(f1_values.real ** 2 + f1_values.imag ** 2))
+    corr = (corr_num / corr_den).item()
+
+    print(f"Mean absolute difference in Fourier space: {mag_err:.6f}")
+    print(f"Cosine similarity in Fourier space:        {corr:.6f}")
+
+    # 7) You could also visualize slices:
+    import matplotlib.pyplot as plt
+    mid = grid_size // 2
+
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    plt.title("DFT(volume) magnitude (central slice)")
+    plt.imshow(torch.abs(volume_fft[:, :, mid]).cpu().numpy())
+    plt.colorbar()
+
+    plt.subplot(1, 2, 2)
+    plt.title("Analytic GMM FT magnitude (central slice)")
+    plt.imshow(torch.abs(f1_values[:, :, mid]).cpu().numpy())
+    plt.colorbar()
+
+    plt.tight_layout()
+    plt.show()
+
+    return mag_err, corr
+
+
+def transform_gmm_to_fourier1(gmm, bbox_min, bbox_max, grid_size, scale_by_voxel_volume=True):
+    """
+    Returns a function f1(k) that computes the continuous Fourier transform
+    of the GMM at the discrete frequency index k (matching torch.fft.fftn convention),
+    including the global phase shift from bbox_min.
 
     Args:
-        gmm: Gaussian Mixture Model to transform (MixtureSameFamily distribution)
-        
+        gmm:         A MixtureSameFamily distribution (3D).
+        bbox_min:    (3,) tensor with minimum bounding box coords.
+        bbox_max:    (3,) tensor with maximum bounding box coords.
+        grid_size:   Integer number of voxels in each dimension (N).
+        scale_by_voxel_volume:
+                     If True, multiply the transform by (Δ^3) so that the amplitude
+                     matches the discrete-sum-of-volume convention.
+
     Returns:
-        Function that computes the Fourier transform of the GMM at frequency vectors k
+        f1(k): A callable that takes a tensor of shape (..., 3) for frequency indices
+               in [0..N-1] or negative/positive shifts.  It returns a complex tensor
+               of shape (...).
     """
-    # Extract the mixture weights, component means, and covariances
-    mixture_dist = gmm.mixture_distribution  # Categorical distribution
-    component_dist = gmm.component_distribution  # MultivariateNormal distribution
+    mixture_dist = gmm.mixture_distribution  # Categorical(...), shape: [num_components,]
+    component_dist = gmm.component_distribution  # MultivariateNormal, shape: [num_components, ...]
+    weights = mixture_dist.probs  # (num_components,)
+    means = component_dist.mean  # (num_components, 3)
+    covs = component_dist.covariance_matrix  # (num_components, 3, 3)
 
-    weights = mixture_dist.probs  # Shape: batch_shape x num_components
-    means = component_dist.mean  # Shape: batch_shape x num_components x event_shape
-    covariances = component_dist.covariance_matrix  # Shape: batch_shape x num_components x event_shape x event_shape
+    # We define Δ per dimension (assuming isotropic grid_size for each axis).
+    # shape (3,)
+    delta = (bbox_max - bbox_min) / (grid_size - 1)
 
-    # Ensure that weights, means, and covariances are tensors with appropriate shapes
-    batch_shape = weights.shape[:-1]
-    num_components = weights.shape[-1]
-    event_shape = means.shape[-1]
-
-    def fourier_gmm(k):
+    def f1(k_index):
         """
-        Compute the Fourier transform of the GMM at frequency vectors k.
+        Compute the GMM's 'DFT-like' Fourier transform at the discrete frequency index k_index.
 
-        Args:
-            k: Tensor of shape [..., event_shape], where ... can be any shape.
+        k_index: shape [..., 3], each entry in range [-(N//2)..(N-1)//2] or [0..N-1].
 
-        Returns:
-            Tensor of shape [..., batch_shape], complex dtype.
+        Return: shape [...], complex-valued
         """
-        # Convert k to tensor if not already
-        k = torch.as_tensor(k, dtype=means.dtype, device=means.device)
+        # Ensure k_index is float (for broadcast) and on the same device as means
+        k_index = k_index.to(means.device, means.dtype)
 
-        # Ensure k has shape [..., event_shape]
-        if k.shape[-1] != event_shape:
-            raise ValueError(f"Last dimension of k must be {event_shape}")
+        # Convert k_index -> physical frequency (angular freq) = omega
+        #   If DFT exponent is exp[-i 2π (k·n / N)], then
+        #   in continuous space with x = bbox_min + n*Δ,
+        #   angular frequency is: omega = 2π * (k / N) * (1/Δ)
+        # We'll do this dimension-wise.
+        # shape [..., 3]
+        omega = (2.0 * torch.pi) * (k_index / float(grid_size)) / delta
 
-        # Expand k to match the batch and component dimensions
-        # k_expanded shape: [..., 1, 1, event_shape]
-        k_expanded = k.unsqueeze(-2).unsqueeze(-2)
+        # Expand shapes for broadcasting:
+        #   means:         (num_components, 3)
+        #   covs:          (num_components, 3, 3)
+        #   weights:       (num_components,)
+        #   omega:         (..., 3)
+        # We want to compute for each component:
+        #     exp[- i omega·(mean - bbox_min)] * exp[- 0.5 * (omega^T cov omega)]
+        # then weighted sum.
 
-        # Compute -i * k^T * μ_i for each component
-        # shapes:
-        #   k_expanded: [..., 1, 1, event_shape]
-        #   means: batch_shape x num_components x event_shape
-        #   result: [..., batch_shape, num_components]
-        ik_dot_mu = -1j * torch.sum(k_expanded * means, dim=-1)
+        # shape [..., 1, 3]
+        omega_unsq = omega.unsqueeze(-2)  # add component dimension next
+        # shape (1, num_components, 3)
+        means_unsq = means.unsqueeze(0)
+        # Also shift the mean by bbox_min to align the "voxel index 0" with bbox_min
+        means_shifted = means_unsq - bbox_min  # shape (1, num_components, 3)
 
-        # Compute -0.5 * k^T * Σ_i * k for each component
-        # Expand k and covariances to enable batch computations
-        # k_expanded: [..., 1, 1, event_shape, 1]
-        k_expanded = k_expanded.unsqueeze(-1)
+        # (1, num_components, 3, 3)
+        covs_unsq = covs.unsqueeze(0)
+        # (1, num_components)
+        weights_unsq = weights.unsqueeze(0)
 
-        # covariances: batch_shape x num_components x event_shape x event_shape
-        # k_expanded: [..., 1, 1, event_shape, 1]
-        # We need to broadcast covariances and k_expanded to align batch dimensions
+        # -- Phase from the mean shift:  exp[- i (omega · (mean - bbox_min))]
+        #    shape: [..., 1, num_components]
+        phase_exponent = -1j * torch.sum(omega_unsq * means_shifted, dim=-1)
+        phase_factor = torch.exp(phase_exponent)
 
-        # Expand covariances to include the leading dimensions of k
-        covariances_expanded = covariances.unsqueeze(
-            0)  # shape: [1, batch_shape, num_components, event_shape, event_shape]
+        # -- Gaussian attenuation: exp[- 0.5 * omega^T cov_i omega]
+        #    shape of cov_i: (1, num_components, 3, 3)
+        #    shape of omega_unsq: [..., 1, 3] -> need [..., 1, 3, 1] for matmul
+        omega_vec = omega_unsq.unsqueeze(-1)  # [..., 1, 3, 1]
+        # shape [..., 1, num_components, 3, 1]
+        cov_omega = torch.matmul(covs_unsq, omega_vec)
+        # shape [..., 1, num_components, 1, 1]
+        quad_form = torch.matmul(omega_vec.transpose(-2, -1), cov_omega)
+        quad_form = quad_form.squeeze(-1).squeeze(-1)  # [..., 1, num_components]
+        gauss_factor = torch.exp(-0.5 * quad_form)
 
-        # k_expanded: [..., 1, 1, event_shape, 1]
-        # Expand k_expanded to match the batch and component dimensions
-        batch_dims = k_expanded.shape[:-3]  # [...]
+        # Weighted sum over components
+        # shape [..., 1, num_components]
+        w_factor = weights_unsq * phase_factor * gauss_factor
+        # shape [...]
+        ft_value = w_factor.sum(dim=-1)
 
-        k_expanded = k_expanded.expand(*batch_dims, *covariances.shape[:-2], event_shape, 1)
+        # Optionally scale by voxel volume so the amplitude matches the discrete-sum
+        if scale_by_voxel_volume:
+            vol = torch.prod(delta)  # Δ^3
+            ft_value = ft_value * vol
 
-        # Compute k^T * Σ_i * k
-        # First compute Σ_i * k: result shape: [..., batch_shape, num_components, event_shape, 1]
-        sigma_k = torch.matmul(covariances_expanded, k_expanded)
+        return ft_value
 
-        # Now compute k^T * (Σ_i * k): result shape: [..., batch_shape, num_components, 1, 1]
-        k_sigma_k = torch.matmul(k_expanded.transpose(-2, -1), sigma_k)
-
-        # Extract the scalar value: [..., batch_shape, num_components]
-        k_sigma_k = k_sigma_k.squeeze(-1).squeeze(-1)
-
-        # Compute the exponent: exponent = -i * k^T * μ_i - 0.5 * k^T * Σ_i * k
-        exponent = ik_dot_mu - 0.5 * k_sigma_k
-
-        # Compute the weighted sum over components
-        # weights: batch_shape x num_components
-        # Expand weights to match exponent dimensions
-        weights_expanded = weights.unsqueeze(0)  # shape: [1, batch_shape, num_components]
-
-        # Compute the weighted exponentials and sum over components
-        weighted_exponentials = weights_expanded * torch.exp(exponent)  # shape: [..., batch_shape, num_components]
-        fourier_transform = weighted_exponentials.sum(dim=-1)  # Sum over components
-
-        return fourier_transform  # shape: [..., batch_shape], complex dtype
-
-    return fourier_gmm
+    return f1
 
 
 def transform_gmm_to_fourier2(gmm: MixtureSameFamily):
@@ -512,6 +637,7 @@ def transform_gmm_to_fourier3(gmm: MixtureSameFamily):
 
     return fourier_transform
 
+
 def transform_gmm_to_fourier_params(gmm: MixtureSameFamily):
     r"""
     Transform a Gaussian Mixture Model (GMM) into its closed-form Fourier
@@ -719,5 +845,10 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     # Take min/max across all components
     bbox_min = torch.min(mins, dim=0)[0]  # (D,)
     bbox_max = torch.max(maxs, dim=0)[0]  # (D,)
+
+    bbox_length = bbox_max - bbox_min
+    bbox_mean = (bbox_max + bbox_min) / 2
+    bbox_min = bbox_mean - bbox_length * 2
+    bbox_max = bbox_mean + bbox_length * 2
 
     return bbox_min, bbox_max
