@@ -1,5 +1,5 @@
 # %%
-from .FTGMM import define_gmm, sample_gmm, compare_gmm_volume_to_transforms
+from .FTGMM import ft_grab_scene
 from .GaussianPointCloudScene import GaussianPointCloudScene
 from .ImagePoseDataset import ImagePoseDataset
 from .Camera import CameraInfo
@@ -185,10 +185,8 @@ class GaussianPointCloudTrainer:
 
             recent_losses.append(loss.item())
             
-            if iteration and iteration % 100 == 0:
-                gmm = define_gmm(scene=self.scene)
-                volume = sample_gmm(gmm)
-                compare_gmm_volume_to_transforms(gmm, volume)
+            if iteration and iteration % 1234 == 0:
+                ft_grab_scene(self.scene)
 
             if iteration % self.config.position_learning_rate_decay_interval == 0:
                 scheduler.step()

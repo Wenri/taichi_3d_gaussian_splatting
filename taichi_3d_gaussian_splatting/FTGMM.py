@@ -1,6 +1,7 @@
 #
 # Authors: Bingchen Gong <gongbingchen@gmail.com>
 #
+from collections import UserList
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -12,8 +13,14 @@ from torch.distributions.mixture_same_family import MixtureSameFamily
 from torch.distributions.categorical import Categorical
 import torch.nn.functional as F
 import pytorch3d.transforms
+from tqdm import trange
 
 from .GaussianPointCloudScene import GaussianPointCloudScene
+
+class BigList(UserList):
+    def __repr__(self):
+        # Only show basic info or partial data
+        return f'<BigList len={len(self.list)}>'
 
 
 def quaternions_to_scale_tril(quaternions, log_scales,
@@ -156,7 +163,7 @@ def get_fourier_coords(grid_size, bbox_min, bbox_max, device: Optional[torch.dev
     return k_grid
 
 
-def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
+def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 96, chunk_size=1):
     device = gmm.component_distribution.mean.device
     coords = get_sample_coords(gmm, grid_size)
 
@@ -165,14 +172,14 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
 
     with torch.no_grad():
         # Process ${chunk_size} slices at a time
-        for i in range(0, grid_size, chunk_size):
+        for i in trange(0, grid_size, chunk_size, desc="Computing GMM log probabilities in chunks"):
             end_idx = min(i + chunk_size, grid_size)
             coords_chunk = coords[i:end_idx]  # (chunk,W,D,3)
             volume[i:end_idx] = gmm.log_prob(coords_chunk)
 
     # Visualize middle slice of volume
     fig = plt.figure()
-    plt.imshow(torch.exp(volume[:, :, grid_size // 2].detach().cpu()).numpy())
+    plt.imshow(torch.exp(volume).sum(dim=-1).detach().cpu().numpy())
     plt.savefig('grid_gt.png')
     plt.close()
 
@@ -248,16 +255,16 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
     # 5) Compute the analytic GMM Fourier transform f1(k) on all these indices:
     #    We'll flatten k_indices and process in batches to avoid OOM:
     freq_grid_flat = freqs.view(-1, 3)  # (grid_size^3, 3)
-    batch_size = 1000  # Process 1k points at a time
-    f1_values_list = []
+    batch_size = 500  # Process 100 points at a time
+    f1_values_flat = BigList()
 
-    for i in range(0, freq_grid_flat.shape[0], batch_size):
+    for i in trange(0, freq_grid_flat.shape[0], batch_size, desc="Computing GMM Fourier transform"):
         batch = freq_grid_flat[i:i + batch_size]
         f1_values_batch = f1(batch)  # shape (batch_size,) complex
-        f1_values_list.append(f1_values_batch)
+        f1_values_flat.append(f1_values_batch)
 
     # Concatenate batches
-    f1_values_flat = torch.cat(f1_values_list)
+    f1_values_flat = torch.cat(f1_values_flat.data)
     # reshape back
     f1_volume = f1_values_flat.reshape(grid_size, grid_size, grid_size)
 
@@ -293,7 +300,8 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
     plt.colorbar()
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig('compare_volume_to_transforms.png')
+    plt.close()
 
     return mag_err, corr
 
@@ -583,9 +591,20 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     bbox_min = torch.min(mins, dim=0)[0]  # (D,)
     bbox_max = torch.max(maxs, dim=0)[0]  # (D,)
 
-    bbox_length = bbox_max - bbox_min
-    bbox_mean = (bbox_max + bbox_min) / 2
-    bbox_min = bbox_mean - bbox_length * 2
-    bbox_max = bbox_mean + bbox_length * 2
+    # bbox_length = bbox_max - bbox_min
+    # bbox_mean = (bbox_max + bbox_min) / 2
+    # bbox_min = bbox_mean - bbox_length / 2
+    # bbox_max = bbox_mean + bbox_length / 2
+
+    bbox_min *= 0
+    bbox_min -= 1
+    bbox_max *= 0
+    bbox_max += 1
 
     return bbox_min, bbox_max
+
+
+def ft_grab_scene(scene):
+    gmm = define_gmm(scene=scene)
+    volume = sample_gmm(gmm, grid_size=36)
+    compare_gmm_volume_to_transforms(gmm, volume)

@@ -2,6 +2,7 @@
 import argparse
 import taichi as ti
 from taichi_3d_gaussian_splatting.Camera import CameraInfo
+from taichi_3d_gaussian_splatting.FTGMM import ft_grab_scene
 from taichi_3d_gaussian_splatting.GaussianPointCloudRasterisation import GaussianPointCloudRasterisation
 from taichi_3d_gaussian_splatting.GaussianPointCloudScene import GaussianPointCloudScene
 from taichi_3d_gaussian_splatting.utils import torch2ti, SE3_to_quaternion_and_translation_torch, quaternion_rotate_torch, quaternion_multiply_torch, quaternion_conjugate_torch
@@ -103,6 +104,7 @@ class GaussianPointVisualizer:
             self.config.image_width, self.config.image_height))
 
     def start(self):
+        ft_grab_scene(self.scene)
         while self.gui.running:
             events = self.gui.get_events(self.gui.PRESS)
             start_offset = 0

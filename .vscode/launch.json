@@ -6,20 +6,19 @@
     "configurations": [
         {
             "name": "visualize",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/visualizer.py",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
                 "--parquet_path_list",
-                "/home/kuangyuan/hdd/Development/taichi_3d_gaussian_splatting/logs/tat_truck_every_8_experiment/scene_29000.parquet",
-                "/home/kuangyuan/hdd/Development/taichi_3d_gaussian_splatting/logs/boots_super_sparse_experiment/scene_19000.parquet"
+                "logs/tat_truck_every_8_experiment/scene_30000.parquet",
             ]
         },
         {
             "name": "prepare_BlenderNerf",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/tools/prepare_InstantNGP_with_mesh.py",
             "console": "integratedTerminal",
@@ -33,10 +32,9 @@
                 "/home/kuangyuan/hdd/datasets/nerf_gen/origin_blendernerf/output"
             ]
         },
-
         {
             "name": "gen config template",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -50,7 +48,7 @@
         },
         {
             "name": "kitti train",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -63,7 +61,7 @@
         },
         {
             "name": "kitti train super sparse",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -76,7 +74,7 @@
         },
         {
             "name": "tat train training",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -89,7 +87,7 @@
         },
         {
             "name": "tat truck training",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -102,7 +100,7 @@
         },
         {
             "name": "tat truck training every 8 test",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -115,7 +113,7 @@
         },
         {
             "name": "tat m60 training",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -128,7 +126,7 @@
         },
         {
             "name": "tat playground training",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -141,7 +139,7 @@
         },
         {
             "name": "boots train",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -154,7 +152,7 @@
         },
         {
             "name": "boots sparse train",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
@@ -167,7 +165,7 @@
         },
         {
             "name": "boots super sparse train",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/gaussian_point_train.py",
             "console": "integratedTerminal",
