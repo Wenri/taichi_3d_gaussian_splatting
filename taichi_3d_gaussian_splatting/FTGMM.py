@@ -180,13 +180,30 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 96, chunk_size=1):
             coords_chunk = coords[i:end_idx]  # (chunk,W,D,3)
             volume[i:end_idx] = gmm.log_prob(coords_chunk)
 
-    # Visualize middle slice of volume
+
+    # Visualize center slices along each axis
     os.makedirs('vis', exist_ok=True)
-    fig = plt.figure()
-    plt.imshow(torch.exp(volume).sum(dim=-1).detach().cpu().numpy())
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    grid_size = volume.shape[0]
+    center_idx = grid_size // 2
+    
+    # Plot center slices
+    axes[0].imshow(volume[center_idx, :, :].detach().cpu().numpy())
+    axes[0].set_title('YZ slice (center X)')
+    
+    axes[1].imshow(volume[:, center_idx, :].detach().cpu().numpy())
+    axes[1].set_title('XZ slice (center Y)')
+    
+    axes[2].imshow(volume[:, :, center_idx].detach().cpu().numpy())
+    axes[2].set_title('XY slice (center Z)')
+    
+    plt.tight_layout()
     plt.savefig('vis/grid_gt.png')
     plt.close()
 
+    # Convert log probabilities to probabilities if needed
+    volume = torch.exp(volume)
     return volume
 
 
@@ -199,9 +216,6 @@ def transform_volume_to_fourier(volume: torch.Tensor):
     Returns:
         Fourier transform of volume as complex tensor of shape (grid_size, grid_size, grid_size)
     """
-    # Convert log probabilities to probabilities if needed
-    if torch.min(volume) < 0:
-        volume = torch.exp(volume)
 
     # Normalize volume to sum to 1
     volume = volume / volume.sum()
@@ -594,8 +608,8 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     maxs = means + std_multiplier * stds  # (N, D)
 
     # Take min/max across all components
-    bbox_min = torch.min(mins, dim=0)[0]  # (D,)
-    bbox_max = torch.max(maxs, dim=0)[0]  # (D,)
+    bbox_min = torch.empty(3, device=means.device)
+    bbox_max = torch.empty(3, device=means.device)
 
     # Plot histograms of means for each dimension
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -605,21 +619,26 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
         
         # Fit normal distribution
         mu, std = norm.fit(data)
+        sel = np.abs(data - mu) < std
+
+        data = data[sel]
+        mu, std = norm.fit(data)
         
         # Plot histogram
-        bins_n, bins_edges, _ = axes[i].hist(data, bins=5000, density=True, alpha=0.6)
+        _, bins_edges, _ = axes[i].hist(data, bins=100, density=True, alpha=0.6)
         
         # Plot fitted PDF
-        xmin, xmax = axes[i].get_xlim()
-        x = np.linspace(xmin, xmax, 100)
-        p = norm.pdf(x, mu, std)
-        axes[i].plot(x, p, 'r', linewidth=2)
+        p = norm.pdf(bins_edges, mu, std)
+        axes[i].plot(bins_edges, p, 'r', linewidth=2)
         
         # Set labels
         title = f'Distribution of {dimensions[i]} means\nFit: μ = {mu:.2f}, σ = {std:.2f}'
         axes[i].set_title(title)
         axes[i].set_xlabel(f'{dimensions[i]} coordinate')
         axes[i].set_ylabel('Density')
+
+        bbox_min[i] = (mu - 3 * std).item()
+        bbox_max[i] = (mu + 3 * std).item()
         
     plt.tight_layout()
     plt.savefig('vis/gmm_means_distribution.png')
