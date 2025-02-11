@@ -5,6 +5,8 @@ from collections import UserList
 from typing import Optional
 
 import matplotlib.pyplot as plt
+import numpy as np
+from scipy.stats import norm
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -599,10 +601,26 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     dimensions = ['X', 'Y', 'Z']
     for i in range(3):
-        axes[i].hist(means[:, i].detach().cpu().numpy(), bins=5000)
-        axes[i].set_title(f'Distribution of {dimensions[i]} means')
+        data = means[:, i].detach().cpu().numpy()
+        
+        # Fit normal distribution
+        mu, std = norm.fit(data)
+        
+        # Plot histogram
+        bins_n, bins_edges, _ = axes[i].hist(data, bins=5000, density=True, alpha=0.6)
+        
+        # Plot fitted PDF
+        xmin, xmax = axes[i].get_xlim()
+        x = np.linspace(xmin, xmax, 100)
+        p = norm.pdf(x, mu, std)
+        axes[i].plot(x, p, 'r', linewidth=2)
+        
+        # Set labels
+        title = f'Distribution of {dimensions[i]} means\nFit: μ = {mu:.2f}, σ = {std:.2f}'
+        axes[i].set_title(title)
         axes[i].set_xlabel(f'{dimensions[i]} coordinate')
-        axes[i].set_ylabel('Frequency')
+        axes[i].set_ylabel('Density')
+        
     plt.tight_layout()
     plt.savefig('vis/gmm_means_distribution.png')
     plt.close()
