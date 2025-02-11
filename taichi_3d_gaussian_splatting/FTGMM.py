@@ -14,6 +14,7 @@ from torch.distributions.categorical import Categorical
 import torch.nn.functional as F
 import pytorch3d.transforms
 from tqdm import trange
+import os
 
 from .GaussianPointCloudScene import GaussianPointCloudScene
 
@@ -178,9 +179,10 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 96, chunk_size=1):
             volume[i:end_idx] = gmm.log_prob(coords_chunk)
 
     # Visualize middle slice of volume
+    os.makedirs('vis', exist_ok=True)
     fig = plt.figure()
     plt.imshow(torch.exp(volume).sum(dim=-1).detach().cpu().numpy())
-    plt.savefig('grid_gt.png')
+    plt.savefig('vis/grid_gt.png')
     plt.close()
 
     return volume
@@ -209,11 +211,12 @@ def transform_volume_to_fourier(volume: torch.Tensor):
     fourier_volume = torch.fft.fftshift(fourier_volume)
 
     # Visualize middle slice magnitude spectrum
+    os.makedirs('vis', exist_ok=True)
     grid_size = volume.shape[0]
     fig = plt.figure()
     plt.imshow(torch.abs(fourier_volume[:, :, grid_size // 2].detach().cpu()).numpy())
     plt.colorbar()
-    plt.savefig('volume_fourier_spectrum.png')
+    plt.savefig('vis/volume_fourier_spectrum.png')
     plt.close()
 
     return fourier_volume
@@ -285,7 +288,7 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
     print(f"Cosine similarity in Fourier space:        {corr:.6f}")
 
     # 7) You could also visualize slices:
-    import matplotlib.pyplot as plt
+    os.makedirs('vis', exist_ok=True)
     mid = grid_size // 2
 
     plt.figure(figsize=(10, 4))
@@ -300,7 +303,7 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
     plt.colorbar()
 
     plt.tight_layout()
-    plt.savefig('compare_volume_to_transforms.png')
+    plt.savefig('vis/compare_volume_to_transforms.png')
     plt.close()
 
     return mag_err, corr
@@ -564,9 +567,10 @@ def optimize_grid_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9)
             print(f"Epoch {epoch}/{epochs}, Loss: {loss.item()}")
 
     # After training, visualize middle slice of volume
+    os.makedirs('vis', exist_ok=True)
     fig = plt.figure()
     plt.imshow(torch.sigmoid(mygrid.grid.squeeze()[:, :, grid_size // 2].detach().cpu()).numpy())
-    plt.savefig('grid_displacement.png')
+    plt.savefig('vis/grid_displacement.png')
     plt.close()
 
 
@@ -595,12 +599,12 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     dimensions = ['X', 'Y', 'Z']
     for i in range(3):
-        axes[i].hist(means[:, i].detach().cpu().numpy(), bins=50)
+        axes[i].hist(means[:, i].detach().cpu().numpy(), bins=5000)
         axes[i].set_title(f'Distribution of {dimensions[i]} means')
         axes[i].set_xlabel(f'{dimensions[i]} coordinate')
         axes[i].set_ylabel('Frequency')
     plt.tight_layout()
-    plt.savefig('gmm_means_distribution.png')
+    plt.savefig('vis/gmm_means_distribution.png')
     plt.close()
 
     return bbox_min, bbox_max
