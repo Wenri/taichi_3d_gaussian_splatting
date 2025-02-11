@@ -1,11 +1,10 @@
 *.pyc
-logs/
-logs_new/
-data/
-Data/
-*.egg
-*.egg-info
+logs*/
+[dD]ata/
+*.egg*
 imgui.ini
 *.qdstrm
 *.nsys-rep
 *.sqlite
+image/
+vis/

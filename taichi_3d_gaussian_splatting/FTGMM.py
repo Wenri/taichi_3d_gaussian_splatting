@@ -591,15 +591,17 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     bbox_min = torch.min(mins, dim=0)[0]  # (D,)
     bbox_max = torch.max(maxs, dim=0)[0]  # (D,)
 
-    # bbox_length = bbox_max - bbox_min
-    # bbox_mean = (bbox_max + bbox_min) / 2
-    # bbox_min = bbox_mean - bbox_length / 2
-    # bbox_max = bbox_mean + bbox_length / 2
-
-    bbox_min *= 0
-    bbox_min -= 1
-    bbox_max *= 0
-    bbox_max += 1
+    # Plot histograms of means for each dimension
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    dimensions = ['X', 'Y', 'Z']
+    for i in range(3):
+        axes[i].hist(means[:, i].detach().cpu().numpy(), bins=50)
+        axes[i].set_title(f'Distribution of {dimensions[i]} means')
+        axes[i].set_xlabel(f'{dimensions[i]} coordinate')
+        axes[i].set_ylabel('Frequency')
+    plt.tight_layout()
+    plt.savefig('gmm_means_distribution.png')
+    plt.close()
 
     return bbox_min, bbox_max
 
