@@ -85,12 +85,12 @@ def quaternions_to_scale_tril(quaternions, log_scales,
 
 def define_gmm(batch_size=100, n_dim=2, scene: GaussianPointCloudScene = None) -> MixtureSameFamily:
     """Define a Gaussian Mixture Model either from parameters or a GaussianPointCloudScene
-    
+
     Args:
         batch_size: Number of components if creating from parameters
-        n_dim: Number of dimensions if creating from parameters  
+        n_dim: Number of dimensions if creating from parameters
         scene: Optional GaussianPointCloudScene to convert to GMM
-        
+
     Returns:
         MixtureSameFamily: A PyTorch mixture distribution of the Gaussians
     """
@@ -184,20 +184,20 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 96, chunk_size=1):
     # Visualize center slices along each axis
     os.makedirs('vis', exist_ok=True)
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
+
     grid_size = volume.shape[0]
     center_idx = grid_size // 2
-    
+
     # Plot center slices
     axes[0].imshow(volume[center_idx, :, :].detach().cpu().numpy())
     axes[0].set_title('YZ slice (center X)')
-    
+
     axes[1].imshow(volume[:, center_idx, :].detach().cpu().numpy())
     axes[1].set_title('XZ slice (center Y)')
-    
+
     axes[2].imshow(volume[:, :, center_idx].detach().cpu().numpy())
     axes[2].set_title('XY slice (center Z)')
-    
+
     plt.tight_layout()
     plt.savefig('vis/grid_gt.png')
     plt.close()
@@ -209,10 +209,10 @@ def sample_gmm(gmm: MixtureSameFamily, grid_size: int = 96, chunk_size=1):
 
 def transform_volume_to_fourier(volume: torch.Tensor):
     """Transform a volume into Fourier space by applying FFT
-    
+
     Args:
         volume: Input volume tensor of shape (grid_size, grid_size, grid_size)
-        
+
     Returns:
         Fourier transform of volume as complex tensor of shape (grid_size, grid_size, grid_size)
     """
@@ -224,14 +224,50 @@ def transform_volume_to_fourier(volume: torch.Tensor):
     fourier_volume = torch.fft.fftn(volume)
 
     # Shift zero frequency component to center
-    fourier_volume = torch.fft.fftshift(fourier_volume)
+    fourier_volume = torch.fft.fftshift(fourier_volume, dim=(0, 1, 2))
 
-    # Visualize middle slice magnitude spectrum
+    # Visualize middle slice magnitude and phase spectrum
     os.makedirs('vis', exist_ok=True)
     grid_size = volume.shape[0]
-    fig = plt.figure()
-    plt.imshow(torch.abs(fourier_volume[:, :, grid_size // 2].detach().cpu()).numpy())
-    plt.colorbar()
+    mid = grid_size // 2
+
+    fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(15, 10))
+
+    # Plot magnitude for each dimension
+    mag_x = torch.abs(fourier_volume[mid, :, :].detach().cpu()).numpy()
+    mag_y = torch.abs(fourier_volume[:, mid, :].detach().cpu()).numpy()
+    mag_z = torch.abs(fourier_volume[:, :, mid].detach().cpu()).numpy()
+
+    im1 = ax1.imshow(mag_x)
+    ax1.set_title('Magnitude Spectrum (YZ plane)')
+    plt.colorbar(im1, ax=ax1)
+
+    im2 = ax2.imshow(mag_y)
+    ax2.set_title('Magnitude Spectrum (XZ plane)')
+    plt.colorbar(im2, ax=ax2)
+
+    im3 = ax3.imshow(mag_z)
+    ax3.set_title('Magnitude Spectrum (XY plane)')
+    plt.colorbar(im3, ax=ax3)
+
+    # Plot phase for each dimension
+    phase_x = torch.angle(fourier_volume[mid, :, :].detach().cpu()).numpy()
+    phase_y = torch.angle(fourier_volume[:, mid, :].detach().cpu()).numpy()
+    phase_z = torch.angle(fourier_volume[:, :, mid].detach().cpu()).numpy()
+
+    im4 = ax4.imshow(phase_x)
+    ax4.set_title('Phase Spectrum (YZ plane)')
+    plt.colorbar(im4, ax=ax4)
+
+    im5 = ax5.imshow(phase_y)
+    ax5.set_title('Phase Spectrum (XZ plane)')
+    plt.colorbar(im5, ax=ax5)
+
+    im6 = ax6.imshow(phase_z)
+    ax6.set_title('Phase Spectrum (XY plane)')
+    plt.colorbar(im6, ax=ax6)
+
+    plt.tight_layout()
     plt.savefig('vis/volume_fourier_spectrum.png')
     plt.close()
 
@@ -306,16 +342,26 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
     # 7) You could also visualize slices:
     os.makedirs('vis', exist_ok=True)
     mid = grid_size // 2
+    plt.figure(figsize=(12, 8))
 
-    plt.figure(figsize=(10, 4))
-    plt.subplot(1, 2, 1)
+    plt.subplot(2, 2, 1)
     plt.title("DFT(volume) magnitude (central slice)")
     plt.imshow(torch.abs(volume_fft[:, :, mid]).cpu().numpy())
     plt.colorbar()
 
-    plt.subplot(1, 2, 2)
+    plt.subplot(2, 2, 2)
     plt.title("Analytic GMM FT magnitude (central slice)")
     plt.imshow(torch.abs(f1_volume[:, :, mid]).cpu().numpy())
+    plt.colorbar()
+
+    plt.subplot(2, 2, 3)
+    plt.title("DFT(volume) phase (central slice)")
+    plt.imshow(torch.atan(torch.tan(torch.angle(volume_fft[:, :, mid]))).cpu().numpy())
+    plt.colorbar()
+
+    plt.subplot(2, 2, 4)
+    plt.title("Analytic GMM FT phase (central slice)")
+    plt.imshow(torch.atan(torch.tan(torch.angle(f1_volume[:, :, mid]))).cpu().numpy())
     plt.colorbar()
 
     plt.tight_layout()
@@ -402,147 +448,6 @@ def transform_gmm_to_fourier1(gmm: MixtureSameFamily, bbox_min: torch.Tensor, bb
     return fourier_gmm
 
 
-def transform_gmm_to_fourier_params(gmm: MixtureSameFamily):
-    r"""
-    Transform a Gaussian Mixture Model (GMM) into its closed-form Fourier
-    transform.  For each component:
-
-        N(x; μ, Σ)   --->   exp[- i k^T μ - ½ k^T Σ k ]
-
-    A GMM is a weighted sum of such Gaussians, so its transform is simply
-    the weighted sum of these exponentials.  One can also rewrite each
-    transform term as a "complex Gaussian" with mean -i Σ⁻¹ μ, same
-    covariance Σ, and an amplitude factor exp(½ μ^T Σ⁻¹ μ).
-
-    Args:
-        gmm (MixtureSameFamily):
-            A mixture model whose `component_distribution` is a batch of
-            MultivariateNormal. That is,
-              gmm = MixtureSameFamily(
-                  mixture_distribution=Categorical(...),
-                  component_distribution=MultivariateNormal(loc=..., covariance_matrix=...)
-              )
-
-    Returns:
-        (new_weights, new_means, new_covs)
-        Where:
-          - new_weights (Tensor): shape (num_components,)
-          - new_means   (Tensor): shape (num_components, D) [complex]
-          - new_covs    (Tensor): shape (num_components, D, D) [real]
-
-        These define a "complex" mixture in frequency space:
-            F(k) = Σ_k [ new_weights_k * exp( -½ (k - new_means_k)ᵀ new_covs_k (k - new_means_k) ) ]
-        but with new_means_k = -i Σ⁻¹ μ_k and an extra amplitude factor
-        folded into new_weights_k = w_k * exp(½ μᵀ Σ⁻¹ μ).
-    """
-    assert isinstance(gmm.component_distribution, MultivariateNormal), (
-        "transform_gmm_to_fourier currently only supports a MixtureSameFamily "
-        "whose component_distribution is MultivariateNormal."
-    )
-
-    # Mixture weights: shape (num_components,)
-    weights = gmm.mixture_distribution.probs
-
-    # Means: shape (num_components, D)
-    means = gmm.component_distribution.loc
-
-    # Covariance matrices: shape (num_components, D, D)
-    covs = gmm.component_distribution.covariance_matrix
-
-    # Invert each covariance (batch-inverse for shape (num_components, D, D))
-    covs_inv = torch.inverse(covs)
-
-    # Compute the quadratic form μ^T Σ⁻¹ μ for each component
-    # quad_k = means_k^T Σ_k⁻¹ means_k, shape (num_components,)
-    quad_form = torch.einsum('bi,bij,bj->b', means, covs_inv, means)
-
-    # new weight = original weight * exp( ½ μ^T Σ⁻¹ μ )
-    new_weights = weights * torch.exp(0.5 * quad_form)
-
-    # new mean = -i Σ⁻¹ μ (will be a complex Tensor)
-    # shape: (num_components, D)
-    # We use 1j in PyTorch for the imaginary unit.
-    new_means = -1j * torch.einsum('bij,bj->bi', covs_inv, means)
-
-    # new covariance = same Σ, but in "complex" sense
-    new_covs = covs.clone()
-
-    return new_weights, new_means, new_covs
-
-
-def fourier_response_at_k(
-        k: torch.Tensor,
-        alpha: torch.Tensor,  # (K,) real
-        means_complex: torch.Tensor,  # (K, D) complex
-        covs: torch.Tensor  # (K, D, D) real
-) -> torch.Tensor:
-    """
-    Evaluate the GMM's Fourier transform at frequency vector(s) k,
-    given the "complex-Gaussian" parameters returned by
-    transform_gmm_to_fourier_params.
-
-    Args:
-        k: shape (D,) or (N, D) real frequency vector(s)
-        alpha: shape (K,) real amplitudes alpha_k
-        means_complex: shape (K, D) complex means m_k
-        covs: shape (K, D, D) real covariance matrices
-
-    Returns:
-        A complex tensor of shape () if k is (D,) or shape (N,) if k is (N,D).
-        Specifically: sum_{k=1..K} alpha_k * exp( -1/2 (k - m_k)^T Sigma_k (k - m_k) ).
-    """
-    # Ensure k has a batch dimension for uniform processing:
-    if k.ndim == 1:
-        k = k.unsqueeze(0)  # shape: (1, D)
-    # Now k is (N, D).
-
-    K = alpha.shape[0]
-    N = k.shape[0]
-    D = k.shape[1]
-
-    # Expand k to shape (K, N, D) so we can vectorize the exponent over components
-    k_expanded = k.unsqueeze(0).expand(K, N, D)  # (K, N, D)
-    m_expanded = means_complex.unsqueeze(1).expand(-1, N, -1)  # (K, N, D)
-
-    # Difference: (k - m_k), shape: (K, N, D), complex
-    diff = k_expanded - m_expanded  # still complex if means_complex is complex
-
-    # We want the quadratic form: diff^T Sigma_k diff
-    # So do a batched multiplication.  We can do it in steps:
-    #   1) shape (K, N, 1, D) x shape (K, 1, D, D) => (K, N, 1, D)
-    #   2) then dot with diff again => shape (K, N).
-
-    diff_2 = diff.unsqueeze(-2)  # (K, N, 1, D)
-    # Expand covs to (K, N, D, D) if needed
-    covs_expanded = covs.unsqueeze(1).expand(-1, N, -1, -1)  # (K, N, D, D)
-
-    quad_part = torch.matmul(diff_2, covs_expanded)  # (K, N, 1, D)
-    # Now multiply by diff (K, N, D, 1)
-    diff_3 = diff.unsqueeze(-1)  # (K, N, D, 1)
-    exponent_terms = torch.matmul(quad_part, diff_3)  # (K, N, 1, 1)
-    exponent_terms = exponent_terms.squeeze(-1).squeeze(-1)  # (K, N), complex
-
-    # The exponent is -1/2 * exponent_terms
-    # => shape (K, N) complex
-    exponents = -0.5 * exponent_terms
-
-    # exponentiate: exp(exponents) => shape (K, N) complex
-    comp_vals = torch.exp(exponents)
-
-    # Multiply by alpha_k: shape (K,) => broadcast with (K, N)
-    # => shape (K, N)
-    comp_vals = comp_vals * alpha.unsqueeze(-1)  # broadcast along N dimension
-
-    # Sum over K => shape (N,)
-    response = comp_vals.sum(dim=0)
-
-    # If the original input was (D,) (i.e. no batch), return a scalar:
-    if N == 1:
-        return response[0]
-    else:
-        return response
-
-
 def optimize_grid_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9):
     device = gmm.component_distribution.mean.device
 
@@ -590,13 +495,13 @@ def optimize_grid_gmm(gmm: MixtureSameFamily, grid_size: int = 36, chunk_size=9)
     plt.close()
 
 
-def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
+def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 2.0):
     """Estimate bounding box of a GMM by considering means and covariances
-    
+
     Args:
         gmm: Mixture of multivariate normals
         std_multiplier: How many standard deviations to include (default 3.0 covers ~99.7%)
-    
+
     Returns:
         tuple: (min_coords, max_coords) tensors of shape (n_dim,)
     """
@@ -616,21 +521,21 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
     dimensions = ['X', 'Y', 'Z']
     for i in range(3):
         data = means[:, i].detach().cpu().numpy()
-        
+
         # Fit normal distribution
         mu, std = norm.fit(data)
-        sel = np.abs(data - mu) < std
 
-        data = data[sel]
-        mu, std = norm.fit(data)
-        
+        # sel = np.abs(data - mu) < std
+        # data = data[sel]
+        # mu, std = norm.fit(data)
+
         # Plot histogram
         _, bins_edges, _ = axes[i].hist(data, bins=100, density=True, alpha=0.6)
-        
+
         # Plot fitted PDF
         p = norm.pdf(bins_edges, mu, std)
         axes[i].plot(bins_edges, p, 'r', linewidth=2)
-        
+
         # Set labels
         title = f'Distribution of {dimensions[i]} means\nFit: μ = {mu:.2f}, σ = {std:.2f}'
         axes[i].set_title(title)
@@ -639,7 +544,7 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
 
         bbox_min[i] = (mu - 3 * std).item()
         bbox_max[i] = (mu + 3 * std).item()
-        
+
     plt.tight_layout()
     plt.savefig('vis/gmm_means_distribution.png')
     plt.close()
@@ -649,5 +554,5 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 3.0):
 
 def ft_grab_scene(scene):
     gmm = define_gmm(scene=scene)
-    volume = sample_gmm(gmm, grid_size=36)
+    volume = sample_gmm(gmm, grid_size=35)
     compare_gmm_volume_to_transforms(gmm, volume)
