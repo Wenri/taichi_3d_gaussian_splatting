@@ -274,17 +274,6 @@ def transform_volume_to_fourier(volume: torch.Tensor):
     return fourier_volume
 
 
-def transform_gmm(gmm: MixtureSameFamily):
-    bbox_min, bbox_max = estimate_gmm_bbox(gmm)
-    f1 = transform_gmm_to_fourier1(gmm, bbox_min, bbox_max)
-    alpha, complex_means, fourier_cov = transform_gmm_to_fourier_params(gmm)
-
-    k = torch.as_tensor([[1, 2, 3]], dtype=alpha.dtype, device=alpha.device)
-    v1 = f1(k)
-    # v4 = fourier_response_at_k(k, alpha, complex_means, fourier_cov)
-    return v1
-
-
 @torch.no_grad()
 def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tensor):
     """
@@ -551,6 +540,17 @@ def estimate_gmm_bbox(gmm: MixtureSameFamily, std_multiplier: float = 2.0):
 
     return bbox_min, bbox_max
 
+
+def regularize_gmm_to_fourier(gmm: MixtureSameFamily):
+    device = gmm.component_distribution.mean.device
+    dtype = gmm.component_distribution.mean.dtype
+
+    bbox_min, bbox_max = estimate_gmm_bbox(gmm)
+    f1 = transform_gmm_to_fourier1(gmm, bbox_min, bbox_max)
+
+    k = torch.as_tensor([[1, 2, 3]], dtype=dtype, device=device)
+    v1 = f1(k)
+    return v1
 
 def ft_grab_scene(scene):
     gmm = define_gmm(scene=scene)
