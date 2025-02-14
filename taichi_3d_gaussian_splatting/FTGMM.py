@@ -345,12 +345,12 @@ def compare_gmm_volume_to_transforms(gmm: MixtureSameFamily, volume: torch.Tenso
 
     plt.subplot(2, 2, 3)
     plt.title("DFT(volume) phase (central slice)")
-    plt.imshow(torch.atan(torch.tan(torch.angle(volume_fft[:, :, mid]))).cpu().numpy())
+    plt.imshow(torch.angle(volume_fft[:, :, mid]).cpu().numpy())
     plt.colorbar()
 
     plt.subplot(2, 2, 4)
     plt.title("Analytic GMM FT phase (central slice)")
-    plt.imshow(torch.atan(torch.tan(torch.angle(f1_volume[:, :, mid]))).cpu().numpy())
+    plt.imshow(torch.angle(f1_volume[:, :, mid]).cpu().numpy())
     plt.colorbar()
 
     plt.tight_layout()

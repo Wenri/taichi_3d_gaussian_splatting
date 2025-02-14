@@ -11,6 +11,9 @@
             "program": "${workspaceFolder}/visualizer.py",
             "console": "integratedTerminal",
             "justMyCode": true,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
             "args": [
                 "--parquet_path_list",
                 "logs/tat_truck_every_8_experiment/scene_30000.parquet",
