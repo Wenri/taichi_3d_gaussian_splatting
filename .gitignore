@@ -1,5 +1,5 @@
 *.pyc
-logs*/
+*.tfevents.*
 [dD]ata/
 *.egg*
 imgui.ini
@@ -7,5 +7,4 @@ imgui.ini
 *.nsys-rep
 *.sqlite
 image/
-vis/
 .idea/
