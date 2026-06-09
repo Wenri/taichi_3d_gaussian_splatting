@@ -2,6 +2,8 @@
 An unofficial implementation of paper [3D Gaussian Splatting
 for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) by taichi lang. 
 
+> **Note — this is a fork.** This repository is a fork of [wanmeihuali/taichi_3d_gaussian_splatting](https://github.com/wanmeihuali/taichi_3d_gaussian_splatting), maintained by Bingchen Gong. On top of the upstream trainer/rasterizer it adds a headless batch renderer ([`gaussian_point_render.py`](gaussian_point_render.py)) and an experimental Fourier-domain / Gaussian-Mixture-Model scene-analysis module ([`FTGMM.py`](taichi_3d_gaussian_splatting/FTGMM.py)) — see the new sections below. Contributors looking for an architecture overview can read [CLAUDE.md](CLAUDE.md).
+
 ## What does 3D Gaussian Splatting do?
 
 ### Training:
@@ -56,6 +58,8 @@ The repo is now tested with the dataset provided by the official implementation.
 
 The results for the official implementation and this implementation are tested on the same dataset. I notice that the result from official implementation is slightly different from their paper, the reason may be the difference in testing resolution.
 
+> _The table below is the upstream baseline. This fork builds on the same trainer and has not published its own benchmark numbers; inference-speed profiling notes for this implementation live in [`benchmark/README.md`](benchmark/README.md)._
+
 | Dataset | source | PSNR | SSIM | #points |
 | --- | --- | --- | --- | --- |
 | Truck(7k) | paper | 23.51 | 0.840 | - |
@@ -79,6 +83,8 @@ The results for the official implementation and this implementation are tested o
 pip install -r requirements.txt
 pip install -e .
 ```
+
+> **`pytorch3d` is also required.** It is imported by [`FTGMM.py`](taichi_3d_gaussian_splatting/FTGMM.py), which the trainer calls automatically, so training fails with `ModuleNotFoundError: pytorch3d` without it. It is deliberately kept out of `requirements.txt` because pytorch3d has to match your exact PyTorch/CUDA build — install it following the [official guide](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md). If you don't need the analysis module, delete the `ft_grab_scene` call in `GaussianPointTrainer.train` instead.
 
 All dependencies can be installed by pip. pytorch/tochvision can be installed by conda. The code is tested on Ubuntu 20.04.2 LTS with python 3.10.10. The hardware is RTX 3090 and CUDA 12.1. The code is not tested on other platforms, but it should work on other platforms with minor modifications.
 
@@ -267,6 +273,27 @@ The visualizer merges multiple point clouds and displays them in the same scene.
 - When all point clouds are selected, use "WASD=-" to move the camera, and use "QE" to rotate by the y-axis, or drag the mouse to do free rotation.
 - When only one of the point clouds is selected, use "WASD=-" to move the object/scene, and use "QE" to rotate the object/scene by the y-axis, or r drag the mouse to do free rotation by the center of the object.
 
+## Headless rendering (batch inference)
+[`gaussian_point_render.py`](gaussian_point_render.py) renders a trained scene to a sequence of PNG frames along a camera trajectory — useful for fly-through videos and offline evaluation, with no GUI required.
+```bash
+python gaussian_point_render.py \
+    --parquet_path logs/tat_truck_every_8_experiment/best_scene.parquet \
+    --poses path/to/poses.json \
+    --output_prefix output/frames \
+    [--gt_prefix output/gt] [--portrait_mode]
+```
+- `--parquet_path`: a trained scene parquet (e.g. `scene_30000.parquet` or `best_scene.parquet`).
+- `--poses`: either a `.json` dataset file (same format as the val set — and when `--gt_prefix` is given, the matching autoscaled ground-truth images are exported too) **or** a `.pt` file produced by `torch.save` of an `(N, 4, 4)` tensor of SE(3) `T_pointcloud_camera` matrices.
+- `--output_prefix`: output directory; frames are written as `frame_000.png`, `frame_001.png`, …
+- `--portrait_mode`: switch to a portrait intrinsics/resolution preset.
+
+Frames can be assembled into a video with e.g. `ffmpeg -i output/frames/frame_%03d.png out.mp4`.
+
+## Experimental: Fourier-domain / GMM analysis (FTGMM)
+[`FTGMM.py`](taichi_3d_gaussian_splatting/FTGMM.py) is an experimental analysis module that treats the trained point cloud as a continuous density: it builds a PyTorch `MixtureSameFamily` Gaussian Mixture Model from the valid Gaussians (means = positions, covariances from the rotation/scale features, mixture weights = `sigmoid(alpha)`), samples it onto a voxel grid, and compares that against its Fourier-domain representation. Diagnostic figures are written to `vis/`.
+
+It currently runs **automatically during training** — `ft_grab_scene(scene)` is invoked every 1234 iterations from `GaussianPointTrainer.train` — and therefore requires `pytorch3d` (see [Installation](#installation)). This is a work-in-progress research feature; remove that call from the training loop if you only want to reproduce the upstream training results.
+
 ## How to contribute/Use CI to train on cloud
 
 I've enabled CI and cloud-based training now. The function is not very stable yet. It enables anyone to contribute to this repo even if you don't have a GPU.
@@ -294,7 +321,7 @@ The current implementation is based on my understanding of the paper, and it wil
 ### Engineering part
 - [x] fix bug: crash when there's no point in camrea.
 - [x] Add a inference only framework to support adding/moving objects in the scene, scene merging, scene editing, etc.
-- [ ] Add a install script/docker image
+- [x] Add a docker image — see [`Dockerfile.aws`](Dockerfile.aws) (used by the cloud CI). A standalone install script is still TODO.
 - [ ] Support batch training. Currently the code only supports single image training, and only uses small part of the GPU memory.
 - [ ] Implement radix sort/cumsum by Taichi instead of torch, torch-taichi tensor cast seems only available on CUDA device. If we want to switch to other device, we need to get rid of torch.
 - [ ] Implement a Taichi only inference rasterizer which only use taichi field, and migrate to MacOS/Android/IOS.
